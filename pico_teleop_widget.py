@@ -24,6 +24,7 @@ class PicoTeleopWidget(ttk.Frame):
         self._controller = controller
         self._calibration_step = 0
         self._calibration_points = [None, None, None]
+        self._cal_prev_a = False  # Track A button state for calibration capture
 
         self._build_scrollable()
         self._build_ui()
@@ -245,9 +246,13 @@ class PicoTeleopWidget(ttk.Frame):
         self._left_trigger_bar = ttk.Progressbar(vr_frame, length=120, mode='determinate', maximum=100)
         self._left_trigger_bar.grid(row=5, column=1, sticky="w", padx=4)
 
-        ttk.Label(vr_frame, text="Buttons:").grid(row=6, column=0, sticky="w")
+        ttk.Label(vr_frame, text="L-Grip:").grid(row=6, column=0, sticky="w")
+        self._left_grip_bar = ttk.Progressbar(vr_frame, length=120, mode='determinate', maximum=100)
+        self._left_grip_bar.grid(row=6, column=1, sticky="w", padx=4)
+
+        ttk.Label(vr_frame, text="Buttons:").grid(row=7, column=0, sticky="w")
         self._lbl_buttons = ttk.Label(vr_frame, text="A:- B:- X:- Y:-", font=MONO)
-        self._lbl_buttons.grid(row=6, column=1, sticky="w", padx=4)
+        self._lbl_buttons.grid(row=7, column=1, sticky="w", padx=4)
 
         row += 1
 
@@ -337,16 +342,27 @@ class PicoTeleopWidget(ttk.Frame):
         row += 1
 
         # -- Calibration --
-        cal_frame = ttk.LabelFrame(f, text="Calibration", padding=8)
+        cal_frame = ttk.LabelFrame(f, text="Calibration (VR-to-Robot Axis Mapping)", padding=8)
         cal_frame.grid(row=row, column=0, sticky="ew", pady=(0, 6))
 
-        self._btn_calibrate = ttk.Button(cal_frame, text="Start Calibration",
+        cal_btn_row = ttk.Frame(cal_frame)
+        cal_btn_row.pack(fill="x", pady=(0, 4))
+        self._btn_calibrate = ttk.Button(cal_btn_row, text="Start Calibration",
                                           command=self._on_calibrate)
-        self._btn_calibrate.pack(side="left", padx=(0, 8))
+        self._btn_calibrate.pack(side="left", padx=(0, 4))
+        self._btn_cal_reset = ttk.Button(cal_btn_row, text="Reset to Default",
+                                          command=self._on_calibrate_reset)
+        self._btn_cal_reset.pack(side="left", padx=(0, 4))
+        self._btn_cal_cancel = ttk.Button(cal_btn_row, text="Cancel",
+                                           command=self._on_calibrate_cancel,
+                                           state="disabled")
+        self._btn_cal_cancel.pack(side="left")
 
-        self._lbl_cal_hint = ttk.Label(cal_frame, text="Move VR controller to determine axis mapping",
-                                        wraplength=350)
-        self._lbl_cal_hint.pack(side="left", fill="x")
+        self._lbl_cal_hint = ttk.Label(cal_frame,
+            text="Aligns VR controller axes to robot axes. "
+                 "Stand next to the robot so you can see its arm. Press [A] button on VR controller to capture points.",
+            wraplength=500, justify="left")
+        self._lbl_cal_hint.pack(fill="x")
 
     # ======================================================================
     # Button Handlers
@@ -359,6 +375,7 @@ class PicoTeleopWidget(ttk.Frame):
     def _on_gripper_zero(self):
         """Set gripper to 0% (fully closed)"""
         self._controller._last_gripper_amplitude = 0.0
+        self._controller._gripper_target = 0.0
         try:
             if self._controller._lebai_connected and self._controller._robot:
                 self._controller._robot.set_claw(amplitude=0.0, force=self._controller._gripper_force)
@@ -433,64 +450,101 @@ class PicoTeleopWidget(ttk.Frame):
     # -- Calibration --
 
     def _on_calibrate(self):
+        """Start calibration mode — captures happen via [A] button on VR controller."""
         if not self._controller.xrt_connected:
             messagebox.showwarning("Calibration", "XRT SDK not connected")
             return
 
         if self._calibration_step == 0:
-            self._lbl_cal_hint.config(
-                text="Step 1/3: Hold controller still, press button again"
-            )
             self._calibration_step = 1
-            self._btn_calibrate.config(text="Capture Origin")
+            self._calibration_points = [None, None, None]
+            self._cal_prev_a = True  # Prevent immediate capture if A is held
+            self._btn_calibrate.config(text="Waiting...", state="disabled")
+            self._btn_cal_cancel.config(state="normal")
+            self._lbl_cal_hint.config(
+                text="Step 1/3: Stand next to the robot. Hold the controller near "
+                     "the robot base. Press [A] on the VR controller to capture the origin."
+            )
 
-        elif self._calibration_step == 1:
-            try:
-                import xrobotoolkit_sdk as xrt
-                pose = xrt.get_right_controller_pose()
-                self._calibration_points[0] = list(pose[:3])
-                self._lbl_cal_hint.config(
-                    text="Step 2/3: Move 20cm in Robot +X direction, press button"
-                )
-                self._calibration_step = 2
-                self._btn_calibrate.config(text="Capture +X")
-            except Exception as e:
-                messagebox.showerror("Calibration", f"Failed to read VR pose: {e}")
+    def _calibration_capture(self, vr_pose):
+        """Called from _update_display when [A] is pressed during calibration."""
+        if vr_pose is None or all(v == 0 for v in vr_pose[:3]):
+            return
+
+        pos = list(vr_pose[:3])
+
+        if self._calibration_step == 1:
+            self._calibration_points[0] = pos
+            self._calibration_step = 2
+            self._lbl_cal_hint.config(
+                text="Origin captured! Step 2/3: Move the controller in the direction "
+                     "the robot arm reaches out (its forward direction), about 20cm. "
+                     "Press [A] to capture."
+            )
 
         elif self._calibration_step == 2:
-            try:
-                import xrobotoolkit_sdk as xrt
-                pose = xrt.get_right_controller_pose()
-                self._calibration_points[1] = list(pose[:3])
+            dist = np.linalg.norm(
+                np.array(pos) - np.array(self._calibration_points[0]))
+            if dist < 0.05:
                 self._lbl_cal_hint.config(
-                    text="Step 3/3: Move 20cm in Robot +Z (up), press button"
+                    text="Too close to origin! Move at least 10cm in the robot's "
+                         "forward direction, then press [A] again."
                 )
-                self._calibration_step = 3
-                self._btn_calibrate.config(text="Capture +Z")
-            except Exception as e:
-                messagebox.showerror("Calibration", f"Failed to read VR pose: {e}")
+                return
+            self._calibration_points[1] = pos
+            self._calibration_step = 3
+            self._lbl_cal_hint.config(
+                text="Forward captured! Step 3/3: Go back near the origin, then "
+                     "move the controller STRAIGHT UP about 20cm. Press [A] to capture."
+            )
 
         elif self._calibration_step == 3:
-            try:
-                import xrobotoolkit_sdk as xrt
-                pose = xrt.get_right_controller_pose()
-                self._calibration_points[2] = list(pose[:3])
+            dist = np.linalg.norm(
+                np.array(pos) - np.array(self._calibration_points[0]))
+            if dist < 0.05:
+                self._lbl_cal_hint.config(
+                    text="Too close to origin! Move at least 10cm straight up, "
+                         "then press [A] again."
+                )
+                return
 
+            self._calibration_points[2] = pos
+            try:
                 R = compute_calibration_matrix(
                     self._calibration_points[0],
                     self._calibration_points[1],
                     self._calibration_points[2],
                 )
                 self._controller.set_frame_rotation(R)
-
-                self._lbl_cal_hint.config(text="Calibration complete!")
-                self._calibration_step = 0
-                self._btn_calibrate.config(text="Start Calibration")
+                self._lbl_cal_hint.config(
+                    text="Calibration complete! Axes aligned to your position next to the robot.")
                 logger.info(f"Calibration matrix updated: {R.tolist()}")
             except Exception as e:
                 messagebox.showerror("Calibration", f"Calibration failed: {e}")
-                self._calibration_step = 0
-                self._btn_calibrate.config(text="Start Calibration")
+                self._lbl_cal_hint.config(text="Calibration failed. Try again.")
+
+            self._calibration_step = 0
+            self._btn_calibrate.config(text="Start Calibration", state="normal")
+            self._btn_cal_cancel.config(state="disabled")
+
+    def _on_calibrate_reset(self):
+        """Reset calibration to default VR-to-robot mapping."""
+        from frame_utils import R_VR_TO_ROBOT_DEFAULT
+        self._controller.set_frame_rotation(R_VR_TO_ROBOT_DEFAULT)
+        self._calibration_step = 0
+        self._btn_calibrate.config(text="Start Calibration", state="normal")
+        self._btn_cal_cancel.config(state="disabled")
+        self._lbl_cal_hint.config(text="Reset to default mapping.")
+        logger.info("Calibration reset to default")
+
+    def _on_calibrate_cancel(self):
+        """Cancel calibration in progress."""
+        self._calibration_step = 0
+        self._calibration_points = [None, None, None]
+        self._btn_calibrate.config(text="Start Calibration", state="normal")
+        self._btn_cal_cancel.config(state="disabled")
+        self._lbl_cal_hint.config(
+            text="Calibration cancelled. Current mapping unchanged.")
 
     # ======================================================================
     # Display Update Loop (20Hz)
@@ -499,6 +553,13 @@ class PicoTeleopWidget(ttk.Frame):
     def _update_display(self):
         try:
             s = self._controller.get_status()
+
+            # -- Calibration: capture on [A] button rising edge --
+            if self._calibration_step > 0:
+                a_now = s.get("a_button", False)
+                if a_now and not self._cal_prev_a:
+                    self._calibration_capture(s["vr_pose"])
+                self._cal_prev_a = a_now
 
             # -- Status --
             if not self._controller.xrt_available:
@@ -531,7 +592,7 @@ class PicoTeleopWidget(ttk.Frame):
             )
 
             if s["is_controlling"]:
-                self._lbl_controlling.config(text="YES (grip held)", foreground="green")
+                self._lbl_controlling.config(text="YES (trigger held)", foreground="green")
             else:
                 self._lbl_controlling.config(text="No", foreground="gray")
 
@@ -548,6 +609,7 @@ class PicoTeleopWidget(ttk.Frame):
             self._grip_bar['value'] = s['grip'] * 100
             self._trigger_bar['value'] = s['trigger'] * 100
             self._left_trigger_bar['value'] = s.get('left_trigger', 0) * 100
+            self._left_grip_bar['value'] = s.get('left_grip', 0) * 100
 
             a = "A" if s.get("a_button") else "-"
             b = "B" if s.get("b_button") else "-"

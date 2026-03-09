@@ -127,6 +127,25 @@ def quat_multiply(q1, q2):
     ])
 
 
+def quat_nlerp(q1_wxyz, q2_wxyz, alpha):
+    """
+    Normalized linear interpolation between two quaternions.
+    两个四元数之间的归一化线性插值。
+
+    Args:
+        q1_wxyz: Start quaternion (w, x, y, z)
+        q2_wxyz: End quaternion (w, x, y, z)
+        alpha: Interpolation factor (0=q1, 1=q2)
+    """
+    q1 = np.asarray(q1_wxyz, dtype=np.float64)
+    q2 = np.asarray(q2_wxyz, dtype=np.float64)
+    # Take shortest path
+    if np.dot(q1, q2) < 0:
+        q2 = -q2
+    q = (1.0 - alpha) * q1 + alpha * q2
+    return q / np.linalg.norm(q)
+
+
 def rotvec_to_quat_wxyz(rotvec):
     """
     Convert rotation vector [rx, ry, rz] to quaternion (w, x, y, z).

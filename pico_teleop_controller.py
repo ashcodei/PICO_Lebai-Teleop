@@ -15,6 +15,9 @@ from frame_utils import (
     R_VR_TO_ROBOT_DEFAULT,
     rotate_quaternion,
     quat_diff_to_rotvec,
+    quat_multiply,
+    quat_nlerp,
+    rotvec_to_quat_wxyz,
     clamp_tcp_to_workspace,
     clamp_speed,
 )
@@ -124,8 +127,23 @@ class PicoTeleopController:
         self._last_left_trigger_val = 0.0
         self._last_left_grip_val = 0.0
 
+        # EMA smoothing state for VR input filtering
+        self._smooth_xyz = None
+        self._smooth_quat = None
+        self._ema_alpha = 0.4  # EMA factor (lower = more smoothing)
+
+        # Orientation tracking (quaternion composition, not rotvec addition)
+        self._init_vr_quat = None
+        self._init_robot_quat = None
+
+        # IK reference joint support (auto-detected)
+        self._ik_supports_ref = True
+
         # Gripper state
         self._last_gripper_amplitude = 100.0  # Start open
+        self._gripper_target = 100.0  # Tracks desired amplitude (accumulates small changes)
+        self._last_gripper_cmd_time = 0.0  # Rate-limit gripper commands
+        self._gripper_dt = 0.02  # Will be updated with actual_dt each tick
         self._suction_on = False
         self._prev_a_button = False
         self._prev_y_button = False
@@ -537,11 +555,11 @@ class PicoTeleopController:
                     pass
 
                 # Simulate gripper amplitude (incremental: trigger=close, grip=open)
-                gripper_speed = 3.0
+                gripper_speed_per_sec = 150.0
                 if left_trigger_val > 0.1:
-                    self._last_gripper_amplitude = max(0.0, self._last_gripper_amplitude - left_trigger_val * gripper_speed)
+                    self._last_gripper_amplitude = max(0.0, self._last_gripper_amplitude - left_trigger_val * gripper_speed_per_sec * period)
                 elif left_grip_val > 0.1:
-                    self._last_gripper_amplitude = min(100.0, self._last_gripper_amplitude + left_grip_val * gripper_speed)
+                    self._last_gripper_amplitude = min(100.0, self._last_gripper_amplitude + left_grip_val * gripper_speed_per_sec * period)
 
                 # Simulated suction toggle
                 if self._a_button and not self._prev_a_button:
@@ -602,14 +620,19 @@ class PicoTeleopController:
 
     def _control_loop(self):
         """Main teleoperation control loop / 主遥操作控制循环"""
-        period = 1.0 / self._control_hz
         prev_tcp = list(self._cached_tcp_position)
+        prev_loop_time = time.perf_counter()
 
         while not self._stop_event.is_set():
+            period = 1.0 / self._control_hz  # Re-read each tick so Hz slider takes effect live
             t0 = time.perf_counter()
+            # Use actual elapsed time for accurate motion timing
+            actual_dt = max(0.002, min(t0 - prev_loop_time, 0.1))
+            prev_loop_time = t0
 
             if self._paused:
                 time.sleep(period)
+                prev_loop_time = time.perf_counter()
                 continue
 
             try:
@@ -628,6 +651,7 @@ class PicoTeleopController:
                 self._last_vr_pose = list(vr_pose) if vr_pose is not None else [0]*7
 
                 # Gripper control (left: trigger=close, grip=open)
+                self._gripper_dt = actual_dt
                 self._update_gripper(left_trigger_val, left_grip_val)
 
                 # Suction toggle (A button)
@@ -658,17 +682,39 @@ class PicoTeleopController:
                         robot_rot = np.array(self._cached_tcp_position[3:6])
                         # offset = robot_tcp - controller_pos (scaled)
                         self._offset_xyz = robot_xyz - vr_xyz * self._scale_factor
-                        self._offset_rot = robot_rot - quat_diff_to_rotvec(
-                            np.array([1, 0, 0, 0]), vr_quat_wxyz)
+                        # Save initial quaternions for proper orientation composition
+                        self._init_vr_quat = vr_quat_wxyz.copy()
+                        self._init_robot_quat = rotvec_to_quat_wxyz(robot_rot)
+                        # Initialize EMA smoothing state
+                        self._smooth_xyz = vr_xyz.copy()
+                        self._smooth_quat = vr_quat_wxyz.copy()
                         prev_tcp = list(self._cached_tcp_position)
                         self._prev_joint_angles = None
                         self._is_controlling = True
                         logger.info("Teleop engaged — controller synced to robot tip")
                     else:
-                        # Direct mapping: robot tip = controller position + offset
+                        # Apply EMA smoothing to filter VR tracking noise
+                        alpha = self._ema_alpha
+                        self._smooth_xyz = (1.0 - alpha) * self._smooth_xyz + alpha * vr_xyz
+                        self._smooth_quat = quat_nlerp(self._smooth_quat, vr_quat_wxyz, alpha)
+                        vr_xyz = self._smooth_xyz
+                        vr_quat_wxyz = self._smooth_quat
+
+                        # Position: direct mapping with scale and offset
                         mapped_xyz = vr_xyz * self._scale_factor + self._offset_xyz
+
+                        # Orientation: proper quaternion composition
+                        # delta = current * inverse(initial) → rotation from init to now
+                        q_vr_init_inv = np.array([
+                            self._init_vr_quat[0],
+                            -self._init_vr_quat[1],
+                            -self._init_vr_quat[2],
+                            -self._init_vr_quat[3],
+                        ])
+                        q_delta = quat_multiply(vr_quat_wxyz, q_vr_init_inv)
+                        q_target = quat_multiply(q_delta, self._init_robot_quat)
                         mapped_rot = quat_diff_to_rotvec(
-                            np.array([1, 0, 0, 0]), vr_quat_wxyz) + self._offset_rot
+                            np.array([1, 0, 0, 0]), q_target)
 
                         target_tcp = [
                             mapped_xyz[0], mapped_xyz[1], mapped_xyz[2],
@@ -678,42 +724,47 @@ class PicoTeleopController:
                         # Safety: workspace clamp
                         target_tcp = clamp_tcp_to_workspace(target_tcp, self._workspace_limits)
 
-                        # Safety: speed clamp
+                        # Safety: speed clamp (use actual elapsed time)
                         target_tcp = clamp_speed(
-                            prev_tcp, target_tcp, period,
+                            prev_tcp, target_tcp, actual_dt,
                             self._max_linear_speed, self._max_angular_speed
                         )
 
                         # IK → joint angles, then stream via move_pvt
-                        # move_pvt feeds waypoints the robot interpolates smoothly
                         pose_dict = {
                             'x': target_tcp[0], 'y': target_tcp[1], 'z': target_tcp[2],
                             'rx': target_tcp[3], 'ry': target_tcp[4], 'rz': target_tcp[5],
                         }
                         try:
-                            joint_angles = self._robot.kinematics_inverse(pose_dict)
+                            # Try IK with reference joints for solution continuity
+                            if self._ik_supports_ref and self._prev_joint_angles is not None:
+                                try:
+                                    joint_angles = self._robot.kinematics_inverse(
+                                        pose_dict, self._prev_joint_angles)
+                                except TypeError:
+                                    # SDK doesn't support reference parameter
+                                    self._ik_supports_ref = False
+                                    joint_angles = self._robot.kinematics_inverse(pose_dict)
+                            else:
+                                joint_angles = self._robot.kinematics_inverse(pose_dict)
 
                             # Joint limit protection: ±720° = ±12.566 rad
-                            # If a joint is near the limit and still moving toward it,
-                            # clamp it to stay within safe range
                             JOINT_LIMIT = 12.4  # ~710°, leave margin before 720°
                             if self._prev_joint_angles is not None:
                                 clamped = list(joint_angles)
                                 for i in range(len(clamped)):
                                     prev = self._prev_joint_angles[i]
                                     curr = clamped[i]
-                                    # If approaching +limit and still increasing, clamp
                                     if curr > JOINT_LIMIT and curr > prev:
                                         clamped[i] = JOINT_LIMIT
-                                    # If approaching -limit and still decreasing, clamp
                                     elif curr < -JOINT_LIMIT and curr < prev:
                                         clamped[i] = -JOINT_LIMIT
                                 joint_angles = clamped
 
-                            # Compute joint velocities from difference
+                            # Compute joint velocities (use actual elapsed time)
                             if self._prev_joint_angles is not None:
                                 joint_vel = [
-                                    (joint_angles[i] - self._prev_joint_angles[i]) / period
+                                    (joint_angles[i] - self._prev_joint_angles[i]) / actual_dt
                                     for i in range(len(joint_angles))
                                 ]
                             else:
@@ -725,10 +776,9 @@ class PicoTeleopController:
 
                         if joint_angles is not None:
                             try:
-                                self._robot.move_pvt(joint_angles, joint_vel, period)
+                                # Use actual elapsed time so robot interpolation matches reality
+                                self._robot.move_pvt(joint_angles, joint_vel, actual_dt)
                             except Exception as e:
-                                # move_pvt may fail if buffer is full or motion not started
-                                # Fall back to towardj which always works
                                 try:
                                     self._robot.towardj(joint_angles, self._acceleration, self._max_linear_speed)
                                 except Exception as e2:
@@ -745,12 +795,17 @@ class PicoTeleopController:
                             pass
                         self._is_controlling = False
                         self._offset_xyz = None
-                        self._offset_rot = None
+                        self._init_vr_quat = None
+                        self._init_robot_quat = None
+                        self._smooth_xyz = None
+                        self._smooth_quat = None
                         self._prev_joint_angles = None
                         logger.info("Teleop disengaged")
 
-                # Update robot cache periodically
-                self._update_robot_cache()
+                # Only update robot cache when not actively controlling
+                # to avoid blocking the control loop with network calls
+                if not self._is_controlling:
+                    self._update_robot_cache()
 
             except Exception as e:
                 logger.error(f"Control loop error: {e}")
@@ -778,27 +833,30 @@ class PicoTeleopController:
         Left grip (side, squeeze) = open gripper incrementally
         Harder press = faster change
         """
-        current = self._last_gripper_amplitude
-        gripper_speed = 3.0  # max % change per control loop tick
+        current = self._gripper_target
+        gripper_speed_per_sec = 150.0  # max %/second at full press
 
         if left_trigger_val > 0.1:
-            # Close: decrement by amount proportional to how hard trigger is pressed
-            amplitude = current - left_trigger_val * gripper_speed
+            # Close: decrement proportional to press pressure and actual time
+            self._gripper_target = current - left_trigger_val * gripper_speed_per_sec * self._gripper_dt
         elif left_grip_val > 0.1:
-            # Open: increment by amount proportional to how hard grip is pressed
-            amplitude = current + left_grip_val * gripper_speed
+            # Open: increment proportional to press pressure and actual time
+            self._gripper_target = current + left_grip_val * gripper_speed_per_sec * self._gripper_dt
         else:
             return  # neither pressed, don't change
-        amplitude = max(0.0, min(100.0, amplitude))
+        self._gripper_target = max(0.0, min(100.0, self._gripper_target))
 
-        if abs(amplitude - self._last_gripper_amplitude) < self._gripper_deadband:
-            return
-
-        try:
-            self._robot.set_claw(amplitude=amplitude, force=self._gripper_force)
-            self._last_gripper_amplitude = amplitude
-        except Exception as e:
-            logger.warning(f"set_claw failed: {e}")
+        # Only send command when accumulated change exceeds deadband
+        # AND rate-limit to avoid flooding the robot with commands
+        now = time.time()
+        if (abs(self._gripper_target - self._last_gripper_amplitude) >= self._gripper_deadband
+                and now - self._last_gripper_cmd_time >= 0.05):  # max 20 commands/sec
+            try:
+                self._robot.set_claw(amplitude=self._gripper_target, force=self._gripper_force)
+                self._last_gripper_amplitude = self._gripper_target
+                self._last_gripper_cmd_time = now
+            except Exception as e:
+                logger.warning(f"set_claw failed: {e}")
 
     def _update_suction(self):
         """Toggle suction on A-button press / A按钮切换吸盘"""
@@ -876,6 +934,7 @@ class PicoTeleopController:
             "grip": self._last_grip_val,
             "trigger": self._last_trigger_val,
             "left_trigger": self._last_left_trigger_val,
+            "left_grip": self._last_left_grip_val,
             "a_button": self._a_button,
             "b_button": self._b_button,
             "x_button": self._x_button,
