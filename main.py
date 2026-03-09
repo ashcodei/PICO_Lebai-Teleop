@@ -51,7 +51,7 @@ def setup_styles(root):
 def main():
     parser = argparse.ArgumentParser(description="PICO VR Teleop for Lebai LM3")
     parser.add_argument("--ip", default="10.20.17.1", help="Lebai robot IP address")
-    parser.add_argument("--scale", type=float, default=0.5, help="Scale factor")
+    parser.add_argument("--scale", type=float, default=1.0, help="Scale factor")
     parser.add_argument("--hz", type=int, default=50, help="Control loop frequency")
     parser.add_argument("--max-speed", type=float, default=0.5, help="Max linear speed (m/s)")
     args = parser.parse_args()

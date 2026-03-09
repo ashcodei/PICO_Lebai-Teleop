@@ -57,7 +57,7 @@ class PicoTeleopController:
     def __init__(
         self,
         lebai_ip="10.20.17.1",
-        scale_factor=0.5,
+        scale_factor=1.0,
         control_hz=50,
         max_linear_speed=0.5,
         max_angular_speed=1.0,
@@ -332,6 +332,20 @@ class PicoTeleopController:
                 self._robot.start_sys()
                 time.sleep(0.5)
                 self._update_robot_cache()
+
+                # Read current gripper value from robot
+                try:
+                    claw = self._robot.get_claw()
+                    if claw is not None:
+                        amp = claw.get('amplitude', 100.0)
+                        self._last_gripper_amplitude = amp
+                        logger.info(f"Gripper initialized to {amp:.0f}%")
+                except Exception:
+                    pass
+
+                # Start live state polling thread
+                self._start_robot_poll()
+
                 logger.info(f"Lebai connected to {self._lebai_ip}")
                 self.state = self.STATE_SDK_CONNECTED
                 return True
@@ -342,8 +356,33 @@ class PicoTeleopController:
             logger.error(self._error_message)
             return False
 
+    def _start_robot_poll(self):
+        """Start background thread that polls robot state at 10Hz."""
+        self._robot_poll_stop = threading.Event()
+        self._robot_poll_thread = threading.Thread(
+            target=self._robot_poll_loop, daemon=True, name="RobotPollLoop")
+        self._robot_poll_thread.start()
+
+    def _stop_robot_poll(self):
+        """Stop robot state polling thread."""
+        if hasattr(self, '_robot_poll_stop'):
+            self._robot_poll_stop.set()
+        if hasattr(self, '_robot_poll_thread') and self._robot_poll_thread:
+            self._robot_poll_thread.join(timeout=1.0)
+            self._robot_poll_thread = None
+
+    def _robot_poll_loop(self):
+        """Poll robot TCP and joint positions at 10Hz for live display."""
+        while not self._robot_poll_stop.is_set():
+            # Skip polling if the control loop is handling it
+            if self._state != self.STATE_RUNNING:
+                self._update_robot_cache()
+            self._robot_poll_stop.wait(0.1)  # 10Hz
+
     def disconnect_lebai(self) -> bool:
         """Disconnect Lebai robot."""
+        self._stop_robot_poll()
+
         if self._state == self.STATE_RUNNING:
             self.stop_teleop()
 
