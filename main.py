@@ -1,6 +1,5 @@
 """
 PICO VR Teleoperation for Lebai LM3 — Main Entry Point
-PICO VR 遥操作乐白LM3 — 主入口
 
 Usage:
     python main.py
@@ -33,7 +32,7 @@ def setup_logging():
 
 
 def setup_styles(root):
-    """Configure ttk styles / 配置ttk样式"""
+    """Configure ttk styles."""
     style = ttk.Style()
     try:
         style.theme_use("clam")
