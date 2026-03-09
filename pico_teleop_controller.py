@@ -1,9 +1,7 @@
 """
 PICO VR Teleoperation Controller for Lebai LM3
-PICO VR 遥操作控制器（乐白LM3）
 
 Bridges XRoboToolkit SDK tracking data to Lebai robot arm motion.
-将XRoboToolkit SDK跟踪数据桥接到乐白机械臂运动。
 """
 
 import threading
@@ -44,8 +42,6 @@ except ImportError:
 class PicoTeleopController:
     """
     PICO VR teleoperation controller for Lebai LM3.
-    PICO VR 遥操作控制器（乐白LM3）。
-
     Reads VR controller pose + buttons, computes delta TCP,
     and streams movel commands to the Lebai robot.
     """
@@ -264,7 +260,7 @@ class PicoTeleopController:
     # ======================================================================
 
     def connect_xrt(self) -> bool:
-        """Connect to XRoboToolkit SDK / 连接 XRoboToolkit SDK"""
+        """Connect to XRoboToolkit SDK."""
         if not _xrt_available:
             self._error_message = "xrobotoolkit_sdk not installed"
             logger.warning(self._error_message)
@@ -299,7 +295,7 @@ class PicoTeleopController:
             return False
 
     def disconnect_xrt(self) -> bool:
-        """Disconnect XRoboToolkit SDK / 断开 XRoboToolkit SDK"""
+        """Disconnect XRoboToolkit SDK."""
         self._stop_preview()
 
         if self._state == self.STATE_RUNNING:
@@ -321,7 +317,7 @@ class PicoTeleopController:
         return True
 
     def connect_lebai(self) -> bool:
-        """Connect to Lebai robot / 连接乐白机器人"""
+        """Connect to Lebai robot."""
         if not _lebai_available:
             self._error_message = "lebai_sdk not installed"
             logger.warning(self._error_message)
@@ -347,7 +343,7 @@ class PicoTeleopController:
             return False
 
     def disconnect_lebai(self) -> bool:
-        """Disconnect Lebai robot / 断开乐白机器人"""
+        """Disconnect Lebai robot."""
         if self._state == self.STATE_RUNNING:
             self.stop_teleop()
 
@@ -371,7 +367,7 @@ class PicoTeleopController:
     # ======================================================================
 
     def start_teleop(self) -> bool:
-        """Start teleoperation loop / 启动遥操作循环"""
+        """Start teleoperation loop."""
         if not self._xrt_connected:
             self._error_message = "XRT SDK not connected"
             return False
@@ -392,7 +388,7 @@ class PicoTeleopController:
         return True
 
     def stop_teleop(self) -> bool:
-        """Stop teleoperation loop / 停止遥操作循环"""
+        """Stop teleoperation loop."""
         self._stop_event.set()
         if self._control_thread and self._control_thread.is_alive():
             self._control_thread.join(timeout=2.0)
@@ -414,7 +410,7 @@ class PicoTeleopController:
         return True
 
     def pause_teleop(self):
-        """Pause teleoperation / 暂停遥操作"""
+        """Pause teleoperation."""
         self._paused = True
         if self._robot:
             try:
@@ -424,13 +420,13 @@ class PicoTeleopController:
         self.state = self.STATE_PAUSED
 
     def resume_teleop(self):
-        """Resume teleoperation / 恢复遥操作"""
+        """Resume teleoperation."""
         self._paused = False
         self._is_controlling = False  # Re-capture references on resume
         self.state = self.STATE_RUNNING
 
     def emergency_stop(self):
-        """Emergency stop — halt everything immediately / 紧急停止"""
+        """Emergency stop — halt everything immediately."""
         self._stop_event.set()
         self._is_controlling = False
 
@@ -448,7 +444,7 @@ class PicoTeleopController:
         logger.warning("EMERGENCY STOP triggered")
 
     def reset_from_emergency(self) -> bool:
-        """Reset after emergency stop / 紧急停止后复位"""
+        """Reset after emergency stop."""
         if self._robot:
             try:
                 self._robot.start_sys()
@@ -486,7 +482,7 @@ class PicoTeleopController:
     # ======================================================================
 
     def _start_preview(self):
-        """Start VR preview polling thread / 启动VR预览轮询线程"""
+        """Start VR preview polling thread."""
         if self._preview_active:
             return
         self._preview_stop.clear()
@@ -498,7 +494,7 @@ class PicoTeleopController:
         logger.info("VR preview started")
 
     def _stop_preview(self):
-        """Stop VR preview polling thread / 停止VR预览轮询线程"""
+        """Stop VR preview polling thread."""
         self._preview_stop.set()
         if self._preview_thread and self._preview_thread.is_alive():
             self._preview_thread.join(timeout=1.0)
@@ -509,7 +505,6 @@ class PicoTeleopController:
         """
         VR preview loop — reads VR data at 20Hz, computes what the robot
         target TCP would be. Runs independently of the teleop control loop.
-        VR预览循环 — 20Hz读取VR数据，计算模拟的机器人目标TCP。
         """
         period = 1.0 / 20.0  # 20Hz for preview
         sim_init_xyz = None
@@ -619,7 +614,7 @@ class PicoTeleopController:
     # ======================================================================
 
     def _control_loop(self):
-        """Main teleoperation control loop / 主遥操作控制循环"""
+        """Main teleoperation control loop."""
         prev_tcp = list(self._cached_tcp_position)
         prev_loop_time = time.perf_counter()
 
@@ -828,7 +823,7 @@ class PicoTeleopController:
     # ======================================================================
 
     def _update_gripper(self, left_trigger_val, left_grip_val):
-        """Map left controller to Lebai claw / 左手控制夹爪
+        """Map left controller to Lebai claw.
         Left trigger (top, index finger) = close gripper incrementally
         Left grip (side, squeeze) = open gripper incrementally
         Harder press = faster change
@@ -859,7 +854,7 @@ class PicoTeleopController:
                 logger.warning(f"set_claw failed: {e}")
 
     def _update_suction(self):
-        """Toggle suction on A-button press / A按钮切换吸盘"""
+        """Toggle suction on A-button press."""
         try:
             a_pressed = xrt.get_A_button()
         except Exception:
@@ -879,7 +874,7 @@ class PicoTeleopController:
         self._prev_a_button = a_pressed
 
     def _check_emergency_button(self):
-        """Y button triggers emergency stop / Y按钮触发紧急停止"""
+        """Y button triggers emergency stop."""
         try:
             y_pressed = xrt.get_Y_button()
         except Exception:
@@ -896,7 +891,7 @@ class PicoTeleopController:
     # ======================================================================
 
     def _update_robot_cache(self):
-        """Update cached robot positions from SDK / 从SDK更新缓存的机器人位置"""
+        """Update cached robot positions from SDK."""
         if not self._robot:
             return
         try:
@@ -916,7 +911,7 @@ class PicoTeleopController:
     # ======================================================================
 
     def get_status(self) -> dict:
-        """Get full controller status / 获取完整控制器状态"""
+        """Get full controller status."""
         return {
             "state": self.state,
             "error": self._error_message,
@@ -951,7 +946,7 @@ class PicoTeleopController:
         }
 
     def get_state_for_recording(self) -> dict:
-        """Get state snapshot for data recording / 获取用于数据记录的状态快照"""
+        """Get state snapshot for data recording."""
         return {
             "timestamp": time.time(),
             "vr_pose": list(self._last_vr_pose),

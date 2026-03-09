@@ -1,9 +1,7 @@
 """
 Coordinate Frame Utilities for PICO VR Teleoperation
-PICO VR 遥操作坐标系工具
 
 Math utilities for VR-to-robot coordinate transforms.
-VR到机器人坐标系变换的数学工具。
 """
 
 import numpy as np
@@ -21,10 +19,7 @@ R_VR_TO_ROBOT_DEFAULT = np.array([
 
 
 def quat_to_rotation_matrix(q_wxyz):
-    """
-    Convert quaternion (w, x, y, z) to 3x3 rotation matrix.
-    将四元数 (w, x, y, z) 转换为 3x3 旋转矩阵。
-    """
+    """Convert quaternion (w, x, y, z) to 3x3 rotation matrix."""
     w, x, y, z = q_wxyz
     return np.array([
         [1 - 2*(y*y + z*z),     2*(x*y - w*z),     2*(x*z + w*y)],
@@ -34,10 +29,7 @@ def quat_to_rotation_matrix(q_wxyz):
 
 
 def rotation_matrix_to_quat(R):
-    """
-    Convert 3x3 rotation matrix to quaternion (w, x, y, z).
-    将 3x3 旋转矩阵转换为四元数 (w, x, y, z)。
-    """
+    """Convert 3x3 rotation matrix to quaternion (w, x, y, z)."""
     trace = np.trace(R)
     if trace > 0:
         s = 0.5 / np.sqrt(trace + 1.0)
@@ -70,7 +62,6 @@ def rotation_matrix_to_quat(R):
 def rotate_quaternion(q_wxyz, R):
     """
     Rotate a quaternion by a 3x3 rotation matrix using conjugation.
-    用 3x3 旋转矩阵通过共轭旋转四元数。
 
     Applies: q' = R_quat * q * R_quat_inv
     This matches the XRoboToolkit reference implementation.
@@ -83,7 +74,6 @@ def rotate_quaternion(q_wxyz, R):
 def quat_diff_to_rotvec(q1_wxyz, q2_wxyz):
     """
     Compute rotation vector from q1 to q2.
-    计算从 q1 到 q2 的旋转向量。
 
     Returns [rx, ry, rz] (axis-angle representation).
     """
@@ -113,10 +103,7 @@ def quat_diff_to_rotvec(q1_wxyz, q2_wxyz):
 
 
 def quat_multiply(q1, q2):
-    """
-    Multiply two quaternions (w, x, y, z).
-    四元数乘法 (w, x, y, z)。
-    """
+    """Multiply two quaternions (w, x, y, z)."""
     w1, x1, y1, z1 = q1
     w2, x2, y2, z2 = q2
     return np.array([
@@ -130,7 +117,6 @@ def quat_multiply(q1, q2):
 def quat_nlerp(q1_wxyz, q2_wxyz, alpha):
     """
     Normalized linear interpolation between two quaternions.
-    两个四元数之间的归一化线性插值。
 
     Args:
         q1_wxyz: Start quaternion (w, x, y, z)
@@ -147,10 +133,7 @@ def quat_nlerp(q1_wxyz, q2_wxyz, alpha):
 
 
 def rotvec_to_quat_wxyz(rotvec):
-    """
-    Convert rotation vector [rx, ry, rz] to quaternion (w, x, y, z).
-    将旋转向量转换为四元数。
-    """
+    """Convert rotation vector [rx, ry, rz] to quaternion (w, x, y, z)."""
     angle = np.linalg.norm(rotvec)
     if angle < 1e-8:
         return np.array([1.0, 0.0, 0.0, 0.0])
@@ -164,7 +147,6 @@ def rotvec_to_quat_wxyz(rotvec):
 def clamp_tcp_to_workspace(tcp, limits):
     """
     Clamp XYZ of TCP pose to workspace bounding box.
-    将TCP位置限制在工作空间边界内。
 
     Args:
         tcp: [x, y, z, rx, ry, rz] in meters/radians
@@ -183,7 +165,6 @@ def clamp_tcp_to_workspace(tcp, limits):
 def clamp_speed(prev_tcp, target_tcp, dt, max_linear, max_angular):
     """
     Limit per-step movement to enforce max speed.
-    限制每步运动以执行最大速度限制。
 
     Args:
         prev_tcp: Previous TCP [x, y, z, rx, ry, rz]
@@ -226,7 +207,6 @@ def clamp_speed(prev_tcp, target_tcp, dt, max_linear, max_angular):
 def compute_calibration_matrix(origin_vr, x_vr, z_vr):
     """
     Compute R_VR_TO_ROBOT from 3-point calibration.
-    从三点标定计算 VR 到机器人旋转矩阵。
 
     Args:
         origin_vr: VR position at origin [x, y, z]

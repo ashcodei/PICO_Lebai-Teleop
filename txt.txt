@@ -1,0 +1,2 @@
+bash /opt/apps/roboticsservice/runService.sh 2>&1
+adb reverse --remove-all && adb reverse tcp:60061 tcp:60061 && adb reverse tcp:63901 tcp:63901

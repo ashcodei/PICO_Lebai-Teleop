@@ -135,18 +135,15 @@ class PicoTeleopWidget(ttk.Frame):
         self._entry_ip.insert(0, self._controller._lebai_ip)
         self._entry_ip.pack(side="left", padx=(0, 4))
 
-        # Quick IP presets for WiFi vs Ethernet
-        self._btn_ip_wifi = ttk.Button(ip_frame, text="WiFi (10.20.17.1)",
+        # Quick IP preset for Lebai WiFi
+        self._btn_ip_wifi = ttk.Button(ip_frame, text="Lebai WiFi (10.20.17.1)",
                                         command=lambda: self._set_ip("10.20.17.1"))
         self._btn_ip_wifi.pack(side="left", padx=(0, 4))
-        self._btn_ip_eth = ttk.Button(ip_frame, text="Ethernet (192.168.1.100)",
-                                       command=lambda: self._set_ip("192.168.1.100"))
-        self._btn_ip_eth.pack(side="left", padx=(0, 4))
 
         net_frame = ttk.Frame(conn_frame)
         net_frame.pack(fill="x")
         self._lbl_net_info = ttk.Label(net_frame,
-            text="Ethernet: enp2s0 (192.168.10.100)  |  WiFi: wlo1 (for PICO VR)",
+            text="Lebai connection: WiFi (10.20.17.1)  |  PICO: USB (ADB)",
             font=("Consolas", 9), foreground="gray")
         self._lbl_net_info.pack(side="left")
 
